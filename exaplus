@@ -1,6 +1,6 @@
 #!/usr/bin/env lua
 
-local VERSION = 'EXAplusLua 0.3'
+local VERSION = 'EXAplusLua 0.4'
 
 local root = debug.getinfo(1, 'S').source:match('@(.*/)') or './'
 local use_bundled = os.getenv('EXAPLUS_USE_BUNDLED') == '1'
@@ -579,13 +579,13 @@ local function print_result_set(rs, fetch_fn, fetch_kb)
     end
     line()
   else
-    if header_printed then
-      line()
-    else
+    if not header_printed then
       line()
       rowprint(headers)
       line()
       for _, r in ipairs(rows or {}) do rowprint(r) end
+      line()
+    else
       line()
     end
   end
@@ -694,10 +694,20 @@ local function main()
   end
 
   local function send_req(req)
+    if not ws then error('not connected') end
     ws:send_text(json.encode(req))
     local rep, rerr = ws:recv()
-    if not rep then error(rerr or 'connection closed') end
-    local obj = json.decode(rep)
+    if not rep then
+      pcall(function() ws:close() end)
+      ws = nil
+      error(rerr or 'connection closed')
+    end
+    local ok, obj = pcall(json.decode, rep)
+    if not ok then
+      pcall(function() ws:close() end)
+      ws = nil
+      error('invalid response: ' .. tostring(obj))
+    end
     if obj.attributes then
       update_attrs(obj.attributes)
     end
@@ -791,7 +801,10 @@ local function main()
   end
 
   local function close_session()
-    ws:close()
+    if ws then
+      pcall(function() ws:close() end)
+    end
+    ws = nil
     if not opts.quiet then
       print('Disconnected.')
     end
@@ -919,7 +932,11 @@ local function main()
   while true do
     local prompt = 'SQL_EXA> '
     local line = lineedit.readline(prompt, hist, build_status())
-    if not line then break end
+    if not line then
+      if not ws then break end
+      if not opts.quiet then io.write('Use quit or exit to leave.\n') end
+      break
+    end
     if line ~= lineedit.CANCEL then
       local trimmed = line:gsub('^%s+',''):gsub('%s+$','')
       local lower = trimmed:lower()
@@ -950,10 +967,14 @@ local function main()
   end
   lineedit.save_history(hist, history_path(), 500)
   close_session()
+  return hist
 end
 
-local ok, err = pcall(main)
+local ok, err, hist_out = pcall(main)
 if not ok then
   write_error(err)
+  pcall(function()
+    if hist_out then lineedit.save_history(hist_out, history_path(), 500) end
+  end)
   os.exit(1)
 end
