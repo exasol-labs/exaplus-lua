@@ -1,6 +1,6 @@
 #!/usr/bin/env lua
 
-local VERSION = 'EXAplusLua 0.4'
+local VERSION = 'EXAplusLua 0.6'
 
 local root = debug.getinfo(1, 'S').source:match('@(.*/)') or './'
 local use_bundled = os.getenv('EXAPLUS_USE_BUNDLED') == '1'
@@ -919,6 +919,9 @@ local function main()
   lineedit.load_history(hist, history_path(), 500)
   local function build_status()
     if opts.quiet then return '' end
+    if os.getenv('EXAPLUS_INLINE_STATUS') ~= '1' then
+      return ''
+    end
     local ac = session_attrs.autocommit
     if ac == nil then
       ac = (opts.autocommit and opts.autocommit:upper() ~= 'OFF') and true or false

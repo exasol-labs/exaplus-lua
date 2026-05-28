@@ -150,4 +150,17 @@ else
   echo "SKIP interactive.expect (expect not installed)"
 fi
 
+if command -v tmux >/dev/null 2>&1; then
+  echo "RUN interactive_wrap.sh"
+  EXAPLUS_TEST_QUIET=1 "$DIR/interactive_wrap.sh"
+  echo "OK interactive_wrap.sh"
+
+  echo "RUN interactive_bottom_wrap.sh"
+  EXAPLUS_TEST_QUIET=1 "$DIR/interactive_bottom_wrap.sh"
+  echo "OK interactive_bottom_wrap.sh"
+else
+  echo "SKIP interactive_wrap.sh (tmux not installed)"
+  echo "SKIP interactive_bottom_wrap.sh (tmux not installed)"
+fi
+
 echo "ALL OK"

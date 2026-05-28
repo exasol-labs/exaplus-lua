@@ -78,7 +78,7 @@ collect_artifacts() {
   for exa in "${built[@]}"; do
     local dir
     dir="$(basename "$(dirname "$exa")")"
-    local name="exaplus-${VERSION_TAG:-0.3}-${dir}.tar.gz"
+    local name="exaplus-${VERSION_TAG:-0.6}-${dir}.tar.gz"
     tar -czf "$OUTDIR/$name" -C "$(dirname "$exa")" exaplus
   done
 

@@ -39,26 +39,111 @@ local function pad_status(s)
   local len = visible_len(s)
   if len >= cols then return s end
   local pad = string.rep(' ', cols - len)
-  local rs, re = s:find('\27%[0m')
+  local rs = s:find('\27%[0m')
   if rs then
     return s:sub(1, rs-1) .. pad .. s:sub(rs)
   end
   return s .. pad
 end
 
-local function redraw(prompt, line, cursor, status)
+local function split_wrapped(full, cols)
+  local rows = {}
+  if full == '' then
+    rows[1] = ''
+    return rows
+  end
+  for i = 1, #full, cols do
+    rows[#rows+1] = full:sub(i, i + cols - 1)
+  end
+  if #full % cols == 0 then
+    rows[#rows+1] = ''
+  end
+  return rows
+end
+
+local function build_render(prompt, line, cursor, status)
+  local cols = get_cols()
+  if cols < 1 then cols = 80 end
+  local full = prompt .. line
+  local input_rows = split_wrapped(full, cols)
+  local cursor_offset = #prompt + cursor
+  local cursor_row = math.floor(cursor_offset / cols) + 1
+  local cursor_col = cursor_offset % cols
+  local status_line = (status and status ~= '') and pad_status(status) or nil
+  local total_rows = #input_rows + (status_line and 1 or 0)
+  return {
+    cols = cols,
+    input_rows = input_rows,
+    cursor_row = cursor_row,
+    cursor_col = cursor_col,
+    status_line = status_line,
+    total_rows = total_rows,
+  }
+end
+
+local function clear_render(render)
+  if not render then return end
+  io.write('\r')
+  if render.cursor_row > 1 then
+    io.write(string.format('\27[%dA', render.cursor_row - 1))
+  end
+  for i = 1, render.total_rows do
+    io.write('\27[2K')
+    if i < render.total_rows then
+      io.write('\27[1B\r')
+    end
+  end
+  if render.total_rows > 1 then
+    io.write(string.format('\27[%dA', render.total_rows - 1))
+  end
+  io.write('\r')
+end
+
+local function paint_input_rows(rows)
+  for i, row in ipairs(rows) do
+    io.write(row .. '\27[K')
+    if i < #rows then
+      io.write('\27[1B\r')
+    end
+  end
+end
+
+local function redraw(prompt, line, cursor, status, prev_render)
+  local render = build_render(prompt, line, cursor, status)
   io.write('\27[?25l')
-  io.write('\r' .. prompt .. line .. '\27[K')
-  if status and status ~= '' then
-    io.write('\n' .. pad_status(status) .. '\27[K')
-    io.write('\27[1A\r')
-  else
-    io.write('\r')
+  clear_render(prev_render)
+  paint_input_rows(render.input_rows)
+  if render.status_line then
+    io.write('\27[1B\r')
+    io.write(render.status_line .. '\27[K')
   end
-  local move = #prompt + cursor
-  if move > 0 then
-    io.write(string.format('\27[%dC', move))
+  local up = render.total_rows - render.cursor_row
+  if up > 0 then
+    io.write(string.format('\27[%dA', up))
   end
+  io.write('\r')
+  if render.cursor_col > 0 then
+    io.write(string.format('\27[%dC', render.cursor_col))
+  end
+  io.write('\27[?25h')
+  io.flush()
+  return render
+end
+
+local function commit_render(prompt, line, prev_render)
+  local render = build_render(prompt, line, #line, nil)
+  io.write('\27[?25l')
+  clear_render(prev_render)
+  paint_input_rows(render.input_rows)
+  io.write('\27[K\n')
+  io.write('\27[?25h')
+  io.flush()
+end
+
+local function clear_current_render(prev_render)
+  io.write('\27[?25l')
+  clear_render(prev_render)
+  io.write('\27[2K\r')
   io.write('\27[?25h')
   io.flush()
 end
@@ -140,17 +225,24 @@ local function reverse_search(prompt, hist, current_line, status)
   local query = ''
   local idx = #list + 1
   local found = ''
+  local render = nil
   while true do
     local label = "(reverse-i-search)`" .. query .. "': " .. found
-    redraw(label, '', 0, status)
+    render = redraw(label, '', 0, status, render)
     local ch = read_char()
-    if not ch then return current_line end
+    if not ch then
+      clear_current_render(render)
+      return current_line
+    end
     local b = ch:byte()
     if b == 13 or b == 10 then
+      clear_current_render(render)
       return found ~= '' and found or current_line
     elseif b == 27 then
+      clear_current_render(render)
       return current_line
     elseif b == 7 then
+      clear_current_render(render)
       return current_line
     elseif b == 127 or b == 8 then
       if #query > 0 then
@@ -192,19 +284,14 @@ function lineedit.readline(prompt, hist, status)
     local cursor = 0
     local hist_index = nil
     local hist_orig = ''
-    redraw(prompt, buf, cursor, status)
+    local render = nil
+    render = redraw(prompt, buf, cursor, status, render)
     while true do
       local ch = read_char()
       if not ch then return nil end
       local b = ch:byte()
       if b == 13 or b == 10 then
-        io.write('\r' .. prompt .. buf .. '\27[K')
-        if status and status ~= '' then
-          io.write('\n\27[K')
-        else
-          io.write('\n')
-        end
-        io.flush()
+        commit_render(prompt, buf, render)
         return buf
       elseif b == 127 or b == 8 then
         if cursor > 0 then
@@ -212,7 +299,8 @@ function lineedit.readline(prompt, hist, status)
           cursor = cursor - 1
         end
       elseif b == 3 then
-        io.write('\r\27[K\n')
+        clear_current_render(render)
+        io.write('\n')
         io.flush()
         return lineedit.CANCEL
       elseif b == 1 then
@@ -232,12 +320,8 @@ function lineedit.readline(prompt, hist, status)
         end
       elseif b == 4 then
         if #buf == 0 then
-          io.write('\r' .. prompt .. buf .. '\27[K')
-          if status and status ~= '' then
-            io.write('\n\27[K')
-          else
-            io.write('\n')
-          end
+          clear_current_render(render)
+          io.write('\n')
           io.flush()
           return nil
         else
@@ -303,7 +387,7 @@ function lineedit.readline(prompt, hist, status)
         buf = buf:sub(1, cursor) .. ch .. buf:sub(cursor+1)
         cursor = cursor + 1
       end
-      redraw(prompt, buf, cursor, status)
+      render = redraw(prompt, buf, cursor, status, render)
     end
   end)
   set_raw(false)
